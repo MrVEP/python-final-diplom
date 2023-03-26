@@ -4,7 +4,7 @@ from django.contrib.auth.models import AbstractUser
 from django.contrib.auth.validators import UnicodeUsernameValidator
 from django.db import models
 from django.utils.translation import gettext_lazy as _
-# from django_rest_passwordreset.tokens import get_token_generator
+from django_rest_passwordreset.tokens import get_token_generator
 
 STATUS_CHOICES = (
     ('basket', 'Статус корзины'),
@@ -85,6 +85,7 @@ class User(AbstractUser):
         error_messages={
             'unique': _("A user with that username already exists."),
         },
+        unique=True
     )
     is_active = models.BooleanField(
         _('active'),
@@ -105,10 +106,51 @@ class User(AbstractUser):
         ordering = ('email',)
 
 
+class ConfirmEmailToken(models.Model):
+    class Meta:
+        verbose_name = 'Токен подтверждения Email'
+        verbose_name_plural = 'Токены подтверждения Email'
+
+    @staticmethod
+    def generate_key():
+        """ generates a pseudo random code using os.urandom and binascii.hexlify """
+        return get_token_generator().generate_token()
+
+    user = models.ForeignKey(
+        User,
+        related_name='confirm_email_tokens',
+        on_delete=models.CASCADE,
+        verbose_name=_("The User which is associated to this password reset token")
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name=_("When was this token generated")
+    )
+
+    # Key field, though it is not the primary key of the model
+    key = models.CharField(
+        _("Key"),
+        max_length=64,
+        db_index=True,
+        unique=True
+    )
+
+    def save(self, *args, **kwargs):
+        if not self.key:
+            self.key = self.generate_key()
+        return super(ConfirmEmailToken, self).save(*args, **kwargs)
+
+    def __str__(self):
+        return "Password reset token for user {user}".format(user=self.user)
+
+
 class Shop(models.Model):
     name = models.CharField(max_length=50, verbose_name='Название')
     url = models.URLField(unique=True, verbose_name='Ссылка')
-    filename = models.CharField(max_length=40, verbose_name='Имя файла для загрузки товаров')
+    filename = models.FileField(upload_to='shops', verbose_name='Файл с товарами магазина', blank=True, null=True)
+    owner = models.OneToOneField(User, verbose_name='Управляющий магазином', blank=True, null=True,
+                                 on_delete=models.DO_NOTHING)
 
     class Meta:
         verbose_name = 'Магазин'
@@ -160,7 +202,7 @@ class ProductInfo(models.Model):
         verbose_name = 'Информация о продукте'
         verbose_name_plural = "Информационный список о продуктах"
         constraints = [
-            models.UniqueConstraint(fields=['product', 'shop', 'external_id'], name='unique_product_info'),
+            models.UniqueConstraint(fields=['product', 'shop'], name='unique_product_info'),
         ]
 
 
@@ -215,7 +257,6 @@ class OrderItem(models.Model):
     product_info = models.ForeignKey(ProductInfo, verbose_name='Информация о продукте', related_name='ordered_items',
                                      blank=True,
                                      on_delete=models.CASCADE)
-    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, verbose_name='Магазин')
     quantity = models.PositiveIntegerField(verbose_name='Количество')
 
     class Meta:
@@ -236,6 +277,9 @@ class Contact(models.Model):
     class Meta:
         verbose_name = 'Контакты пользователя'
         verbose_name_plural = "Список контактов пользователя"
+        constraints = [
+            models.UniqueConstraint(fields=['type', 'user_id'], name='Контакт уже создан'),
+        ]
 
     def __str__(self):
         return f'{self.user.name} - {self.value}'
